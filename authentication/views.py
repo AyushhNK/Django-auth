@@ -93,3 +93,42 @@ class ChangePasswordView(APIView):
         Token.objects.filter(user=user).delete()
         return Response({'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
     
+from google.oauth2 import id_token
+from google.auth.transport.requests import Request
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from django.conf import settings
+
+
+
+class GoogleLoginAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        id_token_value = request.data.get('id_token')
+
+
+
+        # List of allowed Client IDs (for web, Android, iOS)
+        allowed_client_ids = [
+            settings.SOCIAL_AUTH_GOOGLE_OAUTH2_KEY,
+            settings.MOBILE_CLIENT_ID,
+        ]
+
+        try:
+            # Verify the ID token with Google's servers
+            id_info = id_token.verify_oauth2_token(id_token_value, Request())
+
+            # Check if the audience matches any of the allowed client IDs
+            if id_info['aud'] not in allowed_client_ids:
+                raise ValueError(f"Token has wrong audience {id_info['aud']}")
+
+            # Extract user information from the token
+            email = id_info.get('email')
+            name = id_info.get('name')
+
+            return Response({'email': email, 'name': name, 'message': 'Token verified successfully'})
+
+        except ValueError as e:
+            return Response({'error': 'Invalid token', 'details': str(e)}, status=400)
