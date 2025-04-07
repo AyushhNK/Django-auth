@@ -107,28 +107,54 @@ class GoogleLoginAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         id_token_value = request.data.get('id_token')
+        
+        if not id_token_value:
+            return Response({'error': 'ID token required'}, status=status.HTTP_400_BAD_REQUEST)
 
-
-
-        # List of allowed Client IDs (for web, Android, iOS)
         allowed_client_ids = [
-            settings.SOCIAL_AUTH_GOOGLE_OAUTH2_KEY,
-            settings.MOBILE_CLIENT_ID,
+            settings.GOOGLE_OAUTH2_CLIENT_ID,
+            settings.GOOGLE_IOS_CLIENT_ID,
         ]
 
         try:
-            # Verify the ID token with Google's servers
-            id_info = id_token.verify_oauth2_token(id_token_value, Request())
+            # Verify token with Google's servers
+            id_info = id_token.verify_oauth2_token(
+                id_token_value,
+                google_requests.Request(),
+                clock_skew_in_seconds=10
+            )
 
-            # Check if the audience matches any of the allowed client IDs
+            # Validate audience
             if id_info['aud'] not in allowed_client_ids:
-                raise ValueError(f"Token has wrong audience {id_info['aud']}")
+                raise ValueError(f"Invalid audience: {id_info['aud']}")
 
-            # Extract user information from the token
-            email = id_info.get('email')
-            name = id_info.get('name')
+            # Ensure email is verified
+            if not id_info.get('email_verified', False):
+                return Response({'error': 'Email not verified'}, status=status.HTTP_403_FORBIDDEN)
 
-            return Response({'email': email, 'name': name, 'message': 'Token verified successfully'})
+            # Get or create user
+            email = id_info['email']
+            first_name, last_name = id_info.get('name', '').split(' ', 1) if 'name' in id_info else ('', '')
+            
+            user, created = User.objects.get_or_create(
+                email=email,
+                defaults={
+                    'username': email,
+                    'first_name': first_name,
+                    'last_name': last_name
+                }
+            )
+
+            auth_token = Token.objects.get_or_create(user=user)[0].key
+
+            return Response({
+                'token': auth_token,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'name': f"{user.first_name} {user.last_name}".strip()
+                }
+            })
 
         except ValueError as e:
-            return Response({'error': 'Invalid token', 'details': str(e)}, status=400)
+            return Response({'error': 'Authentication failed', 'details': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
